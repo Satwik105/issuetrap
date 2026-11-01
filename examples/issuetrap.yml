@@ -1,0 +1,41 @@
+# Copy to .github/workflows/issuetrap.yml in the repository you want to protect.
+#
+# Put any AI-agent job (triage bot, auto-fixer, PR reviewer) behind this one with
+# `needs: issuetrap`, so the agent never reads text that IssueTrap flagged.
+
+name: IssueTrap
+
+on:
+  issues:
+    types: [opened, edited]
+  issue_comment:
+    types: [created, edited]
+  pull_request_target:
+    types: [opened, edited, synchronize]
+  pull_request_review_comment:
+    types: [created, edited]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  issuetrap:
+    runs-on: ubuntu-latest
+    outputs:
+      flagged: ${{ steps.trap.outputs.flagged }}
+    steps:
+      - id: trap
+        uses: Satwik105/issuetrap@v0.1.0
+        with:
+          threshold: 5
+          fail-on-flag: true
+          label: possible-prompt-injection
+
+  # Example: only let your agent run on text IssueTrap passed.
+  # agent:
+  #   needs: issuetrap
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - run: echo "safe to hand this to the agent"

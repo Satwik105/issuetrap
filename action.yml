@@ -1,0 +1,75 @@
+name: "IssueTrap"
+description: "Flag prompt-injection payloads aimed at AI agents in issues, pull requests and comments."
+author: "Satwik Shreesh"
+branding:
+  icon: "shield"
+  color: "red"
+
+inputs:
+  threshold:
+    description: "Risk score at which text is flagged. One high-severity finding scores 5."
+    required: false
+    default: "5"
+  fail-on-flag:
+    description: "Fail the job when something is flagged, so agent jobs that depend on it don't run."
+    required: false
+    default: "true"
+  label:
+    description: "Label to add to the issue or PR when something is flagged. Empty string disables labelling."
+    required: false
+    default: "possible-prompt-injection"
+  github-token:
+    description: "Token used to add the label. Needs issues: write (and pull-requests: write for PRs)."
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  flagged:
+    description: "'true' if any scanned text reached the threshold."
+    value: ${{ steps.scan.outputs.flagged }}
+  score:
+    description: "Highest risk score across the scanned text."
+    value: ${{ steps.scan.outputs.score }}
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install IssueTrap
+      shell: bash
+      run: python -m pip install --quiet --disable-pip-version-check "$ACTION_PATH"
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+
+    # Inputs are passed through env vars, never interpolated into the script,
+    # so attacker-controlled text can't inject shell commands.
+    - name: Scan event
+      id: scan
+      shell: bash
+      run: issuetrap event --format github --threshold "$THRESHOLD" --no-fail
+      env:
+        THRESHOLD: ${{ inputs.threshold }}
+
+    - name: Label
+      if: steps.scan.outputs.flagged == 'true' && inputs.label != ''
+      shell: bash
+      continue-on-error: true
+      run: |
+        number=$(jq -r '.issue.number // .pull_request.number // empty' "$GITHUB_EVENT_PATH")
+        if [ -n "$number" ]; then
+          gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$number/labels" -f "labels[]=$LABEL" > /dev/null
+          echo "Added label '$LABEL' to #$number"
+        fi
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        LABEL: ${{ inputs.label }}
+
+    - name: Fail if flagged
+      if: steps.scan.outputs.flagged == 'true' && inputs.fail-on-flag == 'true'
+      shell: bash
+      run: |
+        echo "::error title=IssueTrap::Possible prompt injection detected (score ${{ steps.scan.outputs.score }}). See the job summary."
+        exit 1
